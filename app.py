@@ -362,6 +362,16 @@ if 'establishment_access' not in st.session_state:
 # Load environment variables
 load_dotenv()
 
+# Get API keys from environment variables or Streamlit secrets
+try:
+    # Try Streamlit secrets first (for cloud deployment)
+    APIFY_API_TOKEN = st.secrets["APIFY_API_TOKEN"]
+    OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
+except:
+    # Fall back to environment variables (for local development)
+    APIFY_API_TOKEN = os.getenv("APIFY_API_TOKEN", "")
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+
 # Language selector at the top
 def get_text(key):
     """Get text in the current language"""
@@ -898,9 +908,9 @@ if not st.session_state.reviews_loaded:
         else:
             col1, col2 = st.columns(2)
             with col1:
-                API_TOKEN = st.text_input(get_text("apify_token"), type="password", value="")
+                API_TOKEN = st.text_input(get_text("apify_token"), type="password", value=APIFY_API_TOKEN)
             with col2:
-                st.session_state.openai_api_key = st.text_input(get_text("openai_token"), type="password", value="")
+                st.session_state.openai_api_key = st.text_input(get_text("openai_token"), type="password", value=OPENAI_API_KEY)
             platforms = [
                 ("Booking.com", "voyager~booking-reviews-scraper", normalize_booking_review),
                 ("Expedia", "tri_angle~expedia-hotels-com-reviews-scraper", normalize_expedia_review),
@@ -990,8 +1000,8 @@ else:
                 
                 # Show witty loading message
                 with st.spinner("🤖 Tech Guru is finding and analyzing your reviews..."):
-                    API_TOKEN = "YOUR_APIFY_API_TOKEN"
-                    st.session_state.openai_api_key = "YOUR_OPENAI_API_KEY"
+                    API_TOKEN = APIFY_API_TOKEN
+                    st.session_state.openai_api_key = OPENAI_API_KEY
                     platforms = [
                         ("Booking.com", "voyager~booking-reviews-scraper", normalize_booking_review),
                         ("Expedia", "tri_angle~expedia-hotels-com-reviews-scraper", normalize_expedia_review),
