@@ -352,6 +352,26 @@ def load_establishments():
 def save_establishments(establishments):
     with open(ESTABLISHMENTS_FILE, "w") as f:
         json.dump(establishments, f, indent=2)
+
+# Initialize DB first
+init_db()
+
+def update_local_establishments_from_global():
+    """Update local establishments from global database"""
+    global_establishments = fetch_global_establishments()
+    # Convert to the format expected by the app
+    establishments = []
+    for est in global_establishments:
+        establishments.append({
+            'name': est['name'],
+            'Booking.com': est['Booking.com'],
+            'Expedia': est['Expedia'],
+            'TripAdvisor': est['TripAdvisor'],
+            'Google Maps': est['Google Maps'],
+            'password': est['password']
+        })
+    return establishments
+
 if 'establishments' not in st.session_state:
     # Load from global database instead of local file
     st.session_state.establishments = update_local_establishments_from_global()
@@ -832,22 +852,6 @@ def fetch_global_establishments():
                 'created_at': row[7]
             } for row in rows
         ]
-
-def update_local_establishments_from_global():
-    """Update local establishments from global database"""
-    global_establishments = fetch_global_establishments()
-    # Convert to the format expected by the app
-    establishments = []
-    for est in global_establishments:
-        establishments.append({
-            'name': est['name'],
-            'Booking.com': est['Booking.com'],
-            'Expedia': est['Expedia'],
-            'TripAdvisor': est['TripAdvisor'],
-            'Google Maps': est['Google Maps'],
-            'password': est['password']
-        })
-    return establishments
 
 # Initialize DB
 init_db()
