@@ -353,7 +353,8 @@ def save_establishments(establishments):
     with open(ESTABLISHMENTS_FILE, "w") as f:
         json.dump(establishments, f, indent=2)
 if 'establishments' not in st.session_state:
-    st.session_state.establishments = load_establishments()
+    # Load from global database instead of local file
+    st.session_state.establishments = update_local_establishments_from_global()
 if 'selected_establishment_idx' not in st.session_state:
     st.session_state.selected_establishment_idx = None
 if 'establishment_access' not in st.session_state:
@@ -388,6 +389,12 @@ st.set_page_config(
     page_icon="📊",
     layout="wide"
 )
+
+# Keep-alive mechanism for Streamlit Cloud
+if 'last_activity' not in st.session_state:
+    st.session_state.last_activity = time.time()
+else:
+    st.session_state.last_activity = time.time()
 
 # Initialize session state variables
 if 'reviews_loaded' not in st.session_state:
@@ -734,6 +741,7 @@ Please provide a professional, evidence-based analysis that ONLY includes review
 DB_FILE = 'reviews.db'
 def init_db():
     with sqlite3.connect(DB_FILE) as conn:
+        # Reviews table
         conn.execute('''CREATE TABLE IF NOT EXISTS reviews (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             establishment_name TEXT,
@@ -743,6 +751,20 @@ def init_db():
             review_text TEXT,
             reviewer_name TEXT,
             replied BOOLEAN
+        )''')
+        
+        # Global establishments table
+        conn.execute('''CREATE TABLE IF NOT EXISTS global_establishments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE,
+            booking_url TEXT,
+            expedia_url TEXT,
+            tripadvisor_url TEXT,
+            google_maps_url TEXT,
+            password TEXT,
+            created_by TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            is_public BOOLEAN DEFAULT 1
         )''')
 
 def insert_reviews(establishment_name, reviews):
@@ -781,12 +803,67 @@ def delete_reviews(establishment_name):
     with sqlite3.connect(DB_FILE) as conn:
         conn.execute('DELETE FROM reviews WHERE establishment_name = ?', (establishment_name,))
 
+def insert_global_establishment(name, booking_url, expedia_url, tripadvisor_url, google_maps_url, password, created_by):
+    with sqlite3.connect(DB_FILE) as conn:
+        try:
+            conn.execute('''INSERT INTO global_establishments 
+                (name, booking_url, expedia_url, tripadvisor_url, google_maps_url, password, created_by) 
+                VALUES (?, ?, ?, ?, ?, ?, ?)''', 
+                (name, booking_url, expedia_url, tripadvisor_url, google_maps_url, password, created_by))
+            return True
+        except sqlite3.IntegrityError:
+            return False  # Establishment already exists
+
+def fetch_global_establishments():
+    with sqlite3.connect(DB_FILE) as conn:
+        cur = conn.execute('''SELECT name, booking_url, expedia_url, tripadvisor_url, google_maps_url, password, created_by, created_at 
+                             FROM global_establishments WHERE is_public = 1 
+                             ORDER BY created_at DESC''')
+        rows = cur.fetchall()
+        return [
+            {
+                'name': row[0],
+                'Booking.com': row[1],
+                'Expedia': row[2],
+                'TripAdvisor': row[3],
+                'Google Maps': row[4],
+                'password': row[5],
+                'created_by': row[6],
+                'created_at': row[7]
+            } for row in rows
+        ]
+
+def update_local_establishments_from_global():
+    """Update local establishments from global database"""
+    global_establishments = fetch_global_establishments()
+    # Convert to the format expected by the app
+    establishments = []
+    for est in global_establishments:
+        establishments.append({
+            'name': est['name'],
+            'Booking.com': est['Booking.com'],
+            'Expedia': est['Expedia'],
+            'TripAdvisor': est['TripAdvisor'],
+            'Google Maps': est['Google Maps'],
+            'password': est['password']
+        })
+    return establishments
+
 # Initialize DB
 init_db()
 
 # Main app logic
 if not st.session_state.reviews_loaded:
-    st.title("Establishment Manager")
+    col_title, col_refresh = st.columns([4, 1])
+    with col_title:
+        st.title("🌍 Global Establishment Manager")
+    with col_refresh:
+        if st.button("🔄 Refresh", help="Reload establishments from global database"):
+            st.session_state.establishments = update_local_establishments_from_global()
+            st.success("✅ Establishments refreshed from global database!")
+            st.rerun()
+    
+    st.info("💡 **All establishments are shared globally!** When you add an establishment, it becomes available for all users to access.")
     # --- Establishment Management UI ---
     if 'edit_establishment_idx' not in st.session_state:
         st.session_state.edit_establishment_idx = None
@@ -826,6 +903,11 @@ if not st.session_state.reviews_loaded:
             col1, col2, col3, col4 = st.columns([4, 1, 1, 1])
             with col1:
                 st.markdown(f"**{est['name'].strip()}**")
+                # Show creator info if available
+                if 'created_by' in est and est['created_by']:
+                    st.caption(f"👤 Added by: {est['created_by']}")
+                elif 'created_at' in est:
+                    st.caption(f"📅 Added: {est['created_at']}")
             with col2:
                 if st.button("Select", key=f"select_{idx}"):
                     st.session_state.selected_establishment_idx = idx
@@ -874,18 +956,22 @@ if not st.session_state.reviews_loaded:
                 if not new_name:
                     st.warning("Name required.")
                 else:
-                    st.session_state.establishments.append({
-                        'name': new_name,
-                        'Booking.com': new_booking,
-                        'Expedia': new_expedia,
-                        'TripAdvisor': new_tripadvisor,
-                        'Google Maps': new_google,
-                        'password': new_password
-                    })
-                    save_establishments(st.session_state.establishments)
-                    st.success(f"Added {new_name}")
-                    st.session_state.show_add_establishment_form = False
-                    st.rerun()
+                    # Generate a simple user identifier (you could enhance this)
+                    user_id = f"User_{int(time.time()) % 10000}"
+                    
+                    # Save to global database
+                    success = insert_global_establishment(
+                        new_name, new_booking, new_expedia, new_tripadvisor, new_google, new_password, user_id
+                    )
+                    
+                    if success:
+                        # Refresh establishments from global database
+                        st.session_state.establishments = update_local_establishments_from_global()
+                        st.success(f"✅ Added '{new_name}' to the global database! It's now available for all users.")
+                        st.session_state.show_add_establishment_form = False
+                        st.rerun()
+                    else:
+                        st.error(f"❌ Establishment '{new_name}' already exists in the global database.")
             if cancel:
                 st.session_state.show_add_establishment_form = False
                 st.rerun()
