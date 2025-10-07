@@ -993,11 +993,20 @@ if not st.session_state.reviews_loaded:
             st.rerun()
         else:
             st.info("🔑 **Default API credentials are provided!** You can use the app immediately or enter your own API keys if preferred.")
-            col1, col2 = st.columns(2)
-            with col1:
-                API_TOKEN = st.text_input(get_text("apify_token"), type="password", value=DEFAULT_APIFY_API_TOKEN, help="Default API token provided. You can use your own if preferred.")
-            with col2:
-                st.session_state.openai_api_key = st.text_input(get_text("openai_token"), type="password", value=DEFAULT_OPENAI_API_KEY, help="Default API key provided. You can use your own if preferred.")
+            # Use default credentials silently unless user opts to provide custom ones
+            API_TOKEN = DEFAULT_APIFY_API_TOKEN
+            st.session_state.openai_api_key = DEFAULT_OPENAI_API_KEY
+
+            with st.expander("Use custom API keys (optional)"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    custom_apify = st.text_input(get_text("apify_token"), type="password", value="", help="Override the default Apify token (optional)")
+                with col2:
+                    custom_openai = st.text_input(get_text("openai_token"), type="password", value="", help="Override the default OpenAI key (optional)")
+                if custom_apify:
+                    API_TOKEN = custom_apify
+                if custom_openai:
+                    st.session_state.openai_api_key = custom_openai
             platforms = [
                 ("Booking.com", "voyager~booking-reviews-scraper", normalize_booking_review),
                 ("Expedia", "tri_angle~expedia-hotels-com-reviews-scraper", normalize_expedia_review),
