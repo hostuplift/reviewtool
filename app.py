@@ -353,13 +353,7 @@ def save_establishments(establishments):
     with open(ESTABLISHMENTS_FILE, "w") as f:
         json.dump(establishments, f, indent=2)
 
-if 'establishments' not in st.session_state:
-    # Load from global database instead of local file
-    st.session_state.establishments = update_local_establishments_from_global()
-if 'selected_establishment_idx' not in st.session_state:
-    st.session_state.selected_establishment_idx = None
-if 'establishment_access' not in st.session_state:
-    st.session_state.establishment_access = {}
+# Session state will be initialized after functions are defined
 
 # Load environment variables
 load_dotenv()
@@ -504,6 +498,15 @@ def update_local_establishments_from_global():
 
 # Initialize DB
 init_db()
+
+# Initialize session state after all functions are defined
+if 'establishments' not in st.session_state:
+    # Load from global database instead of local file
+    st.session_state.establishments = update_local_establishments_from_global()
+if 'selected_establishment_idx' not in st.session_state:
+    st.session_state.selected_establishment_idx = None
+if 'establishment_access' not in st.session_state:
+    st.session_state.establishment_access = {}
 
 # Language selector at the top
 def get_text(key):
