@@ -393,6 +393,121 @@ except:
     DEFAULT_APIFY_API_TOKEN = os.getenv("APIFY_API_TOKEN", "")
     DEFAULT_OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
+# --- Database Helper Functions ---
+DB_FILE = 'reviews.db'
+def init_db():
+    with sqlite3.connect(DB_FILE) as conn:
+        # Reviews table
+        conn.execute('''CREATE TABLE IF NOT EXISTS reviews (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            establishment_name TEXT,
+            platform TEXT,
+            review_date TEXT,
+            star_rating REAL,
+            review_text TEXT,
+            reviewer_name TEXT,
+            replied BOOLEAN
+        )''')
+        
+        # Global establishments table
+        conn.execute('''CREATE TABLE IF NOT EXISTS global_establishments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE,
+            booking_url TEXT,
+            expedia_url TEXT,
+            tripadvisor_url TEXT,
+            google_maps_url TEXT,
+            password TEXT,
+            created_by TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            is_public BOOLEAN DEFAULT 1
+        )''')
+
+def insert_reviews(establishment_name, reviews):
+    with sqlite3.connect(DB_FILE) as conn:
+        conn.executemany('''INSERT INTO reviews (
+            establishment_name, platform, review_date, star_rating, review_text, reviewer_name, replied
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)''', [
+            (
+                establishment_name,
+                r.get('platform', ''),
+                str(r.get('review_date', '')),
+                r.get('star_rating', None),
+                r.get('review_text', ''),
+                r.get('reviewer_name', ''),
+                int(r.get('replied', False))
+            ) for r in reviews
+        ])
+
+def fetch_reviews_from_db(establishment_name):
+    with sqlite3.connect(DB_FILE) as conn:
+        cur = conn.execute('''SELECT platform, review_date, star_rating, review_text, reviewer_name, replied FROM reviews WHERE establishment_name = ?''', (establishment_name,))
+        rows = cur.fetchall()
+        # Return as list of dicts
+        return [
+            {
+                'platform': row[0],
+                'review_date': row[1],
+                'star_rating': row[2],
+                'review_text': row[3],
+                'reviewer_name': row[4],
+                'replied': bool(row[5])
+            } for row in rows
+        ]
+
+def delete_reviews(establishment_name):
+    with sqlite3.connect(DB_FILE) as conn:
+        conn.execute('DELETE FROM reviews WHERE establishment_name = ?', (establishment_name,))
+
+def insert_global_establishment(name, booking_url, expedia_url, tripadvisor_url, google_maps_url, password, created_by):
+    with sqlite3.connect(DB_FILE) as conn:
+        try:
+            conn.execute('''INSERT INTO global_establishments 
+                (name, booking_url, expedia_url, tripadvisor_url, google_maps_url, password, created_by) 
+                VALUES (?, ?, ?, ?, ?, ?, ?)''', 
+                (name, booking_url, expedia_url, tripadvisor_url, google_maps_url, password, created_by))
+            return True
+        except sqlite3.IntegrityError:
+            return False  # Establishment already exists
+
+def fetch_global_establishments():
+    with sqlite3.connect(DB_FILE) as conn:
+        cur = conn.execute('''SELECT name, booking_url, expedia_url, tripadvisor_url, google_maps_url, password, created_by, created_at 
+                             FROM global_establishments WHERE is_public = 1 
+                             ORDER BY created_at DESC''')
+        rows = cur.fetchall()
+        return [
+            {
+                'name': row[0],
+                'Booking.com': row[1],
+                'Expedia': row[2],
+                'TripAdvisor': row[3],
+                'Google Maps': row[4],
+                'password': row[5],
+                'created_by': row[6],
+                'created_at': row[7]
+            } for row in rows
+        ]
+
+def update_local_establishments_from_global():
+    """Update local establishments from global database"""
+    global_establishments = fetch_global_establishments()
+    # Convert to the format expected by the app
+    establishments = []
+    for est in global_establishments:
+        establishments.append({
+            'name': est['name'],
+            'Booking.com': est['Booking.com'],
+            'Expedia': est['Expedia'],
+            'TripAdvisor': est['TripAdvisor'],
+            'Google Maps': est['Google Maps'],
+            'password': est['password']
+        })
+    return establishments
+
+# Initialize DB
+init_db()
+
 # Language selector at the top
 def get_text(key):
     """Get text in the current language"""
@@ -757,104 +872,6 @@ Please provide a professional, evidence-based analysis that ONLY includes review
         except Exception as e:
             st.error(f"Error generating report: {str(e)}")
 
-# --- Database Helper Functions ---
-DB_FILE = 'reviews.db'
-def init_db():
-    with sqlite3.connect(DB_FILE) as conn:
-        # Reviews table
-        conn.execute('''CREATE TABLE IF NOT EXISTS reviews (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            establishment_name TEXT,
-            platform TEXT,
-            review_date TEXT,
-            star_rating REAL,
-            review_text TEXT,
-            reviewer_name TEXT,
-            replied BOOLEAN
-        )''')
-        
-        # Global establishments table
-        conn.execute('''CREATE TABLE IF NOT EXISTS global_establishments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE,
-            booking_url TEXT,
-            expedia_url TEXT,
-            tripadvisor_url TEXT,
-            google_maps_url TEXT,
-            password TEXT,
-            created_by TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            is_public BOOLEAN DEFAULT 1
-        )''')
-
-def insert_reviews(establishment_name, reviews):
-    with sqlite3.connect(DB_FILE) as conn:
-        conn.executemany('''INSERT INTO reviews (
-            establishment_name, platform, review_date, star_rating, review_text, reviewer_name, replied
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)''', [
-            (
-                establishment_name,
-                r.get('platform', ''),
-                str(r.get('review_date', '')),
-                r.get('star_rating', None),
-                r.get('review_text', ''),
-                r.get('reviewer_name', ''),
-                int(r.get('replied', False))
-            ) for r in reviews
-        ])
-
-def fetch_reviews_from_db(establishment_name):
-    with sqlite3.connect(DB_FILE) as conn:
-        cur = conn.execute('''SELECT platform, review_date, star_rating, review_text, reviewer_name, replied FROM reviews WHERE establishment_name = ?''', (establishment_name,))
-        rows = cur.fetchall()
-        # Return as list of dicts
-        return [
-            {
-                'platform': row[0],
-                'review_date': row[1],
-                'star_rating': row[2],
-                'review_text': row[3],
-                'reviewer_name': row[4],
-                'replied': bool(row[5])
-            } for row in rows
-        ]
-
-def delete_reviews(establishment_name):
-    with sqlite3.connect(DB_FILE) as conn:
-        conn.execute('DELETE FROM reviews WHERE establishment_name = ?', (establishment_name,))
-
-def insert_global_establishment(name, booking_url, expedia_url, tripadvisor_url, google_maps_url, password, created_by):
-    with sqlite3.connect(DB_FILE) as conn:
-        try:
-            conn.execute('''INSERT INTO global_establishments 
-                (name, booking_url, expedia_url, tripadvisor_url, google_maps_url, password, created_by) 
-                VALUES (?, ?, ?, ?, ?, ?, ?)''', 
-                (name, booking_url, expedia_url, tripadvisor_url, google_maps_url, password, created_by))
-            return True
-        except sqlite3.IntegrityError:
-            return False  # Establishment already exists
-
-def fetch_global_establishments():
-    with sqlite3.connect(DB_FILE) as conn:
-        cur = conn.execute('''SELECT name, booking_url, expedia_url, tripadvisor_url, google_maps_url, password, created_by, created_at 
-                             FROM global_establishments WHERE is_public = 1 
-                             ORDER BY created_at DESC''')
-        rows = cur.fetchall()
-        return [
-            {
-                'name': row[0],
-                'Booking.com': row[1],
-                'Expedia': row[2],
-                'TripAdvisor': row[3],
-                'Google Maps': row[4],
-                'password': row[5],
-                'created_by': row[6],
-                'created_at': row[7]
-            } for row in rows
-        ]
-
-# Initialize DB
-init_db()
 
 # Main app logic
 if not st.session_state.reviews_loaded:
