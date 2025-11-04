@@ -9,6 +9,7 @@ import os
 import plotly.express as px
 from dotenv import load_dotenv
 import sqlite3
+import psycopg2
 import re
 from dateutil import parser
 import numpy as np
@@ -370,53 +371,95 @@ except:
 
 # --- Database Helper Functions ---
 DB_FILE = 'reviews.db'
+
+def get_sql_connection():
+    """Return a connection to Postgres if DATABASE_URL/POSTGRES_URL is set, else SQLite."""
+    db_url = os.getenv('DATABASE_URL') or os.getenv('POSTGRES_URL')
+    if db_url:
+        return psycopg2.connect(db_url)
+    return sqlite3.connect(DB_FILE)
+
+def is_postgres_connection(conn):
+    return conn.__class__.__module__.startswith('psycopg2')
+
 def init_db():
-    with sqlite3.connect(DB_FILE) as conn:
-        # Reviews table
-        conn.execute('''CREATE TABLE IF NOT EXISTS reviews (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            establishment_name TEXT,
-            platform TEXT,
-            review_date TEXT,
-            star_rating REAL,
-            review_text TEXT,
-            reviewer_name TEXT,
-            replied BOOLEAN
-        )''')
-        
-        # Global establishments table
-        conn.execute('''CREATE TABLE IF NOT EXISTS global_establishments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE,
-            booking_url TEXT,
-            expedia_url TEXT,
-            tripadvisor_url TEXT,
-            google_maps_url TEXT,
-            password TEXT,
-            created_by TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            is_public BOOLEAN DEFAULT 1
-        )''')
+    with get_sql_connection() as conn:
+        cur = conn.cursor()
+        if is_postgres_connection(conn):
+            # Postgres-compatible DDL
+            cur.execute('''CREATE TABLE IF NOT EXISTS reviews (
+                id SERIAL PRIMARY KEY,
+                establishment_name TEXT,
+                platform TEXT,
+                review_date TEXT,
+                star_rating REAL,
+                review_text TEXT,
+                reviewer_name TEXT,
+                replied BOOLEAN
+            )''')
+            cur.execute('''CREATE TABLE IF NOT EXISTS global_establishments (
+                id SERIAL PRIMARY KEY,
+                name TEXT UNIQUE,
+                booking_url TEXT,
+                expedia_url TEXT,
+                tripadvisor_url TEXT,
+                google_maps_url TEXT,
+                password TEXT,
+                created_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_public BOOLEAN DEFAULT TRUE
+            )''')
+        else:
+            # SQLite-compatible DDL
+            cur.execute('''CREATE TABLE IF NOT EXISTS reviews (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                establishment_name TEXT,
+                platform TEXT,
+                review_date TEXT,
+                star_rating REAL,
+                review_text TEXT,
+                reviewer_name TEXT,
+                replied BOOLEAN
+            )''')
+            cur.execute('''CREATE TABLE IF NOT EXISTS global_establishments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE,
+                booking_url TEXT,
+                expedia_url TEXT,
+                tripadvisor_url TEXT,
+                google_maps_url TEXT,
+                password TEXT,
+                created_by TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_public BOOLEAN DEFAULT 1
+            )''')
+        conn.commit()
 
 def insert_reviews(establishment_name, reviews):
-    with sqlite3.connect(DB_FILE) as conn:
-        conn.executemany('''INSERT INTO reviews (
+    with get_sql_connection() as conn:
+        cur = conn.cursor()
+        placeholder = '%s' if is_postgres_connection(conn) else '?'
+        sql = f'''INSERT INTO reviews (
             establishment_name, platform, review_date, star_rating, review_text, reviewer_name, replied
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)''', [
-            (
-                establishment_name,
-                r.get('platform', ''),
-                str(r.get('review_date', '')),
-                r.get('star_rating', None),
-                r.get('review_text', ''),
-                r.get('reviewer_name', ''),
-                int(r.get('replied', False))
-            ) for r in reviews
-        ])
+        ) VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})'''
+        params = [(
+            establishment_name,
+            r.get('platform', ''),
+            str(r.get('review_date', '')),
+            r.get('star_rating', None),
+            r.get('review_text', ''),
+            r.get('reviewer_name', ''),
+            int(r.get('replied', False))
+        ) for r in reviews]
+        cur.executemany(sql, params)
+        conn.commit()
 
 def fetch_reviews_from_db(establishment_name):
-    with sqlite3.connect(DB_FILE) as conn:
-        cur = conn.execute('''SELECT platform, review_date, star_rating, review_text, reviewer_name, replied FROM reviews WHERE establishment_name = ?''', (establishment_name,))
+    with get_sql_connection() as conn:
+        cur = conn.cursor()
+        placeholder = '%s' if is_postgres_connection(conn) else '?'
+        sql = f'''SELECT platform, review_date, star_rating, review_text, reviewer_name, replied FROM reviews WHERE establishment_name = {placeholder}'''
+        cur.execute(sql, (establishment_name,))
         rows = cur.fetchall()
         # Return as list of dicts
         return [
@@ -431,25 +474,55 @@ def fetch_reviews_from_db(establishment_name):
         ]
 
 def delete_reviews(establishment_name):
-    with sqlite3.connect(DB_FILE) as conn:
-        conn.execute('DELETE FROM reviews WHERE establishment_name = ?', (establishment_name,))
+    with get_sql_connection() as conn:
+        cur = conn.cursor()
+        placeholder = '%s' if is_postgres_connection(conn) else '?'
+        cur.execute(f'DELETE FROM reviews WHERE establishment_name = {placeholder}', (establishment_name,))
+        conn.commit()
 
 def insert_global_establishment(name, booking_url, expedia_url, tripadvisor_url, google_maps_url, password, created_by):
-    with sqlite3.connect(DB_FILE) as conn:
+    with get_sql_connection() as conn:
         try:
-            conn.execute('''INSERT INTO global_establishments 
+            cur = conn.cursor()
+            placeholder = '%s' if is_postgres_connection(conn) else '?'
+            sql = f'''INSERT INTO global_establishments 
                 (name, booking_url, expedia_url, tripadvisor_url, google_maps_url, password, created_by) 
-                VALUES (?, ?, ?, ?, ?, ?, ?)''', 
-                (name, booking_url, expedia_url, tripadvisor_url, google_maps_url, password, created_by))
+                VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})'''
+            cur.execute(sql, (name, booking_url, expedia_url, tripadvisor_url, google_maps_url, password, created_by))
+            conn.commit()
             return True
         except sqlite3.IntegrityError:
             return False  # Establishment already exists
+        except Exception:
+            return False
+
+def update_global_establishment(old_name, new_name, booking_url, expedia_url, tripadvisor_url, google_maps_url, password):
+    """Update an establishment row identified by its previous name."""
+    with get_sql_connection() as conn:
+        cur = conn.cursor()
+        placeholder = '%s' if is_postgres_connection(conn) else '?'
+        sql = f'''UPDATE global_establishments
+                  SET name = {placeholder}, booking_url = {placeholder}, expedia_url = {placeholder}, tripadvisor_url = {placeholder}, google_maps_url = {placeholder}, password = {placeholder}
+                  WHERE name = {placeholder}'''
+        cur.execute(sql, (new_name, booking_url, expedia_url, tripadvisor_url, google_maps_url, password, old_name))
+        updated = cur.rowcount > 0
+        conn.commit()
+        return updated
+
+def delete_global_establishment(name):
+    """Soft delete by marking establishment as not public so it no longer appears."""
+    with get_sql_connection() as conn:
+        cur = conn.cursor()
+        placeholder = '%s' if is_postgres_connection(conn) else '?'
+        cur.execute(f'UPDATE global_establishments SET is_public = 0 WHERE name = {placeholder}', (name,))
+        conn.commit()
 
 def fetch_global_establishments():
-    with sqlite3.connect(DB_FILE) as conn:
-        cur = conn.execute('''SELECT name, booking_url, expedia_url, tripadvisor_url, google_maps_url, password, created_by, created_at 
-                             FROM global_establishments WHERE is_public = 1 
-                             ORDER BY created_at DESC''')
+    with get_sql_connection() as conn:
+        cur = conn.cursor()
+        cur.execute('''SELECT name, booking_url, expedia_url, tripadvisor_url, google_maps_url, password, created_by, created_at 
+                       FROM global_establishments WHERE is_public = 1 
+                       ORDER BY created_at DESC''')
         rows = cur.fetchall()
         return [
             {
@@ -480,6 +553,52 @@ def update_local_establishments_from_global():
         })
     return establishments
 
+# One-time migration from local JSON file into the global database (idempotent)
+def migrate_local_file_to_global():
+    local = load_establishments()
+    if not local:
+        return
+    # Insert any that don't exist yet
+    with get_sql_connection() as conn:
+        cur = conn.cursor()
+        for est in local:
+            name = est.get('name', '').strip()
+            if not name:
+                continue
+            # Check existence
+            placeholder = '%s' if is_postgres_connection(conn) else '?'
+            cur.execute(f'SELECT 1 FROM global_establishments WHERE name = {placeholder} LIMIT 1', (name,))
+            exists = cur.fetchone() is not None
+            if exists:
+                continue
+            if is_postgres_connection(conn):
+                cur.execute('''INSERT INTO global_establishments
+                                (name, booking_url, expedia_url, tripadvisor_url, google_maps_url, password, created_by)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s)''',
+                            (
+                                name,
+                                est.get('Booking.com', ''),
+                                est.get('Expedia', ''),
+                                est.get('TripAdvisor', ''),
+                                est.get('Google Maps', ''),
+                                est.get('password', ''),
+                                'migration'
+                            ))
+            else:
+                cur.execute('''INSERT INTO global_establishments
+                                (name, booking_url, expedia_url, tripadvisor_url, google_maps_url, password, created_by)
+                                VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                            (
+                                name,
+                                est.get('Booking.com', ''),
+                                est.get('Expedia', ''),
+                                est.get('TripAdvisor', ''),
+                                est.get('Google Maps', ''),
+                                est.get('password', ''),
+                                'migration'
+                            ))
+        conn.commit()
+
 def update_local_establishments_from_global():
     """Update local establishments from global database"""
     global_establishments = fetch_global_establishments()
@@ -501,6 +620,8 @@ init_db()
 
 # Initialize session state after all functions are defined
 if 'establishments' not in st.session_state:
+    # Migrate any legacy local file entries into the DB
+    migrate_local_file_to_global()
     # Load from global database instead of local file
     st.session_state.establishments = update_local_establishments_from_global()
 if 'selected_establishment_idx' not in st.session_state:
@@ -905,17 +1026,23 @@ if not st.session_state.reviews_loaded:
                 with col_cancel:
                     cancel = st.form_submit_button("Cancel")
                 if save:
-                    st.session_state.establishments[idx] = {
-                        'name': new_name,
-                        'Booking.com': new_booking,
-                        'Expedia': new_expedia,
-                        'TripAdvisor': new_tripadvisor,
-                        'Google Maps': new_google,
-                        'password': new_password
-                    }
-                    save_establishments(st.session_state.establishments)
+                    old_name = est['name']
+                    updated = update_global_establishment(
+                        old_name=old_name,
+                        new_name=new_name,
+                        booking_url=new_booking,
+                        expedia_url=new_expedia,
+                        tripadvisor_url=new_tripadvisor,
+                        google_maps_url=new_google,
+                        password=new_password
+                    )
+                    # Refresh from DB to ensure consistency
+                    st.session_state.establishments = update_local_establishments_from_global()
                     st.session_state.edit_establishment_idx = None
-                    st.success(f"Updated {new_name}")
+                    if updated:
+                        st.success(f"Updated {new_name}")
+                    else:
+                        st.warning("No changes were applied.")
                     st.rerun()
                 if cancel:
                     st.session_state.edit_establishment_idx = None
@@ -943,8 +1070,10 @@ if not st.session_state.reviews_loaded:
                 if st.button("Delete", key=f"delete_{idx}"):
                     to_delete = idx
     if to_delete is not None:
-        del st.session_state.establishments[to_delete]
-        save_establishments(st.session_state.establishments)
+        name_to_delete = st.session_state.establishments[to_delete]['name']
+        delete_global_establishment(name_to_delete)
+        # Refresh from DB
+        st.session_state.establishments = update_local_establishments_from_global()
         if st.session_state.selected_establishment_idx == to_delete:
             st.session_state.selected_establishment_idx = None
             if 'establishment_urls' in st.session_state:
