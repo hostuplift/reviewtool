@@ -599,6 +599,42 @@ def migrate_local_file_to_global():
                             ))
         conn.commit()
 
+# One-time migration: if using Postgres and it is empty, seed from local SQLite DB
+def migrate_sqlite_to_postgres_if_needed():
+    db_url = os.getenv('DATABASE_URL') or os.getenv('POSTGRES_URL')
+    if not db_url:
+        return
+    # Connect to Postgres
+    with get_sql_connection() as pg_conn:
+        if not is_postgres_connection(pg_conn):
+            return
+        pg_cur = pg_conn.cursor()
+        # Check if PG has any establishments
+        pg_cur.execute('SELECT COUNT(1) FROM global_establishments')
+        count = pg_cur.fetchone()[0]
+        if count and count > 0:
+            return
+        # Read from local SQLite if file exists
+        if not os.path.exists(DB_FILE):
+            return
+        try:
+            with sqlite3.connect(DB_FILE) as lite_conn:
+                lite_cur = lite_conn.cursor()
+                lite_cur.execute('''SELECT name, booking_url, expedia_url, tripadvisor_url, google_maps_url, password, created_by
+                                    FROM global_establishments WHERE is_public = 1''')
+                rows = lite_cur.fetchall()
+                if not rows:
+                    return
+                # Insert into Postgres
+                pg_cur.executemany('''INSERT INTO global_establishments
+                                      (name, booking_url, expedia_url, tripadvisor_url, google_maps_url, password, created_by)
+                                      VALUES (%s, %s, %s, %s, %s, %s, %s)
+                                      ON CONFLICT (name) DO NOTHING''', rows)
+                pg_conn.commit()
+        except Exception:
+            # Best-effort migration; ignore errors
+            pass
+
 def update_local_establishments_from_global():
     """Update local establishments from global database"""
     global_establishments = fetch_global_establishments()
@@ -617,6 +653,11 @@ def update_local_establishments_from_global():
 
 # Initialize DB
 init_db()
+"""
+If deploying with Postgres (DATABASE_URL present), seed it from local sources once
+so previous establishments are preserved globally.
+"""
+migrate_sqlite_to_postgres_if_needed()
 
 # Initialize session state after all functions are defined
 if 'establishments' not in st.session_state:
